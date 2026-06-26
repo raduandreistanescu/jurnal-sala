@@ -119,6 +119,21 @@
   .lb img{max-width:100%;max-height:78vh;border-radius:14px;background:#fff}
   .lb .cap{color:var(--acc);font-family:var(--disp);font-weight:700;font-size:22px;text-transform:uppercase;text-align:center}
   .lb .x{position:absolute;top:14px;right:18px;color:#fff;font-size:38px;background:none;line-height:1}
+
+  .seg{display:flex;gap:6px;margin:8px 4px 12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px}
+  .seg button{flex:1;background:transparent;color:var(--mut);border-radius:9px;padding:10px 0;font-family:var(--disp);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:.5px}
+  .seg button.active{background:var(--acc);color:#000}
+  .summary{display:flex;gap:9px;margin:0 4px 4px}
+  .sumbox{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 6px;text-align:center}
+  .sumbox b{display:block;font-family:var(--disp);font-size:25px;color:var(--acc);line-height:1}
+  .sumbox span{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
+  .stats{display:flex;gap:7px;margin:10px 0 4px}
+  .stat{flex:1;background:var(--panel2);border-radius:10px;padding:8px 4px;text-align:center}
+  .stat b{display:block;font-family:var(--disp);font-size:19px;line-height:1.1}
+  .stat span{font-size:9px;color:var(--mut);text-transform:uppercase;letter-spacing:.3px}
+  .stat.up b{color:var(--good)} .stat.flat b{color:var(--mut)} .stat.down b{color:var(--warn)}
+  .chartbox{margin-top:8px}
+  svg.line{width:100%;height:auto;display:block}
 </style>
 </head>
 <body>
@@ -285,35 +300,112 @@ function renderWorkout(){
 }
 
 /* ---------- Progress view ---------- */
-function bestKg(day,i){
-  let best=0,bw=0;
-  const d=state.log[day]||{};
-  Object.keys(d).forEach(w=>{ const c=d[w][i]; if(c&&c.kg){ const k=parseFloat(c.kg); if(k>best){best=k;bw=+w;} }});
-  return best?{kg:best,week:bw}:null;
+let metricState="e1rm";
+const METRICS={kg:"Greutate", vol:"Volum", e1rm:"Forță est."};
+
+function cellVal(c, metric){
+  if(!c) return 0;
+  const kg=parseFloat(c.kg)||0;
+  const reps=(c.sets||[]).map(x=>parseFloat(x)||0);
+  const bestR=reps.length?Math.max(...reps):0;
+  const totR=reps.reduce((a,b)=>a+b,0);
+  if(!kg && !totR) return 0;
+  if(metric==="kg") return kg;
+  if(metric==="vol") return kg*totR;
+  return kg*(1+bestR/30); // 1RM estimat (Epley)
 }
+function seriesFor(day,i,metric){
+  const d=state.log[day]||{};
+  return Object.keys(d).map(Number).sort((a,b)=>a-b)
+    .map(w=>({week:w, val:cellVal(d[w][i],metric)})).filter(p=>p.val>0);
+}
+function num(v){ return (Math.round(v*10)/10).toString().replace(/\.0$/,''); }
+function unit(metric){ return metric==="vol"?"":" kg"; }
+
+function globalStats(){
+  let sessions=0, vol=0; const weeks=new Set();
+  DAY_ORDER.forEach(day=>{ const d=state.log[day]||{};
+    Object.keys(d).forEach(w=>{ let any=false;
+      PROGRAM[day].ex.forEach((ex,i)=>{ const c=d[w][i];
+        const v=cellVal(c,"vol"); if(v>0) vol+=v;
+        if(c&&(c.kg||(c.sets||[]).some(x=>x))) any=true; });
+      if(any){ sessions++; weeks.add(+w); } });
+  });
+  return {sessions, vol, weeks:weeks.size};
+}
+
+function svgLine(series){
+  if(series.length===1){
+    return `<div class="chartbox" style="text-align:center;color:var(--mut);font-size:12px;padding:6px">Un punct logat (săpt. ${series[0].week}) — încă o săptămână și apare graficul.</div>`;
+  }
+  const vals=series.map(p=>p.val); let mn=Math.min(...vals), mx=Math.max(...vals);
+  if(mn===mx){ mn-=1; mx+=1; }
+  const n=series.length, L=16,R=306,T=14,B=80, W=R-L, H=B-T;
+  const X=k=> L + (n===1? W/2 : W*k/(n-1));
+  const Y=v=> B - H*(v-mn)/(mx-mn);
+  const pts=series.map((p,k)=>`${X(k).toFixed(1)},${Y(p.val).toFixed(1)}`).join(" ");
+  const area=`${L},${B} ${pts} ${R},${B}`;
+  const dots=series.map((p,k)=>`<circle cx="${X(k).toFixed(1)}" cy="${Y(p.val).toFixed(1)}" r="3.2" fill="#f2d21e"/>`).join("");
+  const showAll=n<=7;
+  const xlab=series.map((p,k)=> (showAll||k===0||k===n-1)?
+    `<text x="${X(k).toFixed(1)}" y="99" fill="#8d8d88" font-size="9" text-anchor="middle" font-family="Inter">S${p.week}</text>`:"").join("");
+  const f=series[0], l=series[n-1];
+  return `<div class="chartbox"><svg class="line" viewBox="0 0 320 104" preserveAspectRatio="xMidYMid meet">
+    <polygon points="${area}" fill="rgba(242,210,30,.13)"/>
+    <polyline points="${pts}" fill="none" stroke="#f2d21e" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}
+    <text x="${X(0).toFixed(1)}" y="${Math.max(10,Y(f.val)-8).toFixed(1)}" fill="#8d8d88" font-size="10" text-anchor="middle" font-family="Inter">${num(f.val)}</text>
+    <text x="${X(n-1).toFixed(1)}" y="${Math.max(11,Y(l.val)-8).toFixed(1)}" fill="#f5f5f3" font-size="11" font-weight="700" text-anchor="middle" font-family="Inter">${num(l.val)}</text>
+    ${xlab}
+  </svg></div>`;
+}
+
 function renderProgress(){
   const m=document.getElementById("viewProgress"); m.innerHTML="";
+
+  const seg=document.createElement("div"); seg.className="seg";
+  Object.keys(METRICS).forEach(k=>{ const b=document.createElement("button");
+    b.textContent=METRICS[k]; b.className=(k===metricState?"active":"");
+    b.onclick=()=>{ metricState=k; renderProgress(); }; seg.appendChild(b); });
+  m.appendChild(seg);
+
+  const gs=globalStats();
+  const sum=document.createElement("div"); sum.className="summary";
+  sum.innerHTML=`
+    <div class="sumbox"><b>${gs.sessions}</b><span>Antrenamente</span></div>
+    <div class="sumbox"><b>${gs.weeks}</b><span>Săptămâni</span></div>
+    <div class="sumbox"><b>${gs.vol>=1000?(num(gs.vol/1000)+"t"):num(gs.vol)}</b><span>Volum ridicat</span></div>`;
+  m.appendChild(sum);
+  const cap=document.createElement("div");
+  cap.style.cssText="color:var(--mut);font-size:11px;margin:2px 6px 8px;line-height:1.4";
+  cap.textContent = metricState==="e1rm" ? "Forța estimată ține cont și de greutate, și de repetări (1RM estimat) — cea mai bună imagine a creșterii." :
+                    metricState==="vol" ? "Volum = greutate × repetări totale într-o sesiune." :
+                    "Greutatea de lucru folosită la exercițiu.";
+  m.appendChild(cap);
+
   DAY_ORDER.forEach(day=>{
     const dh=document.createElement("div"); dh.className="ov-day";
     dh.textContent=`${DAY_LABEL[day]} — ${PROGRAM[day].name}`; m.appendChild(dh);
     PROGRAM[day].ex.forEach((ex,i)=>{
-      const d=state.log[day]||{};
-      const weeks=Object.keys(d).map(Number).sort((a,b)=>a-b).filter(w=>d[w][i]&&(d[w][i].kg||(d[w][i].sets||[]).some(x=>x)));
+      const s=seriesFor(day,i,metricState);
       const ov=document.createElement("div"); ov.className="ov";
-      let body;
-      if(!weeks.length){ body=`<div class="empty">Încă nelogat</div>`; }
-      else{
-        const pills=weeks.slice(-8).map(w=>{
-          const c=d[w][i]; const reps=(c.sets||[]).filter(x=>x!=="").join("·");
-          return `<div class="pill">S${w} <b>${c.kg||"–"}kg</b> ${reps?("· "+reps):""}</div>`;
-        }).join("");
-        const pr=bestKg(day,i);
-        body=`<div class="hist">${pills}</div>${pr?`<div class="pr">🏆 Record: ${pr.kg} kg (săpt. ${pr.week})</div>`:""}`;
-      }
-      ov.innerHTML=`<h4>${i+1}. ${ex.n}</h4>${body}`;
+      if(!s.length){ ov.innerHTML=`<h4>${i+1}. ${ex.n}</h4><div class="empty">Încă nelogat</div>`; m.appendChild(ov); return; }
+      const start=s[0].val, now=s[s.length-1].val, delta=now-start;
+      const pct=start>0?Math.round(delta/start*100):0;
+      let rec=s[0]; s.forEach(p=>{ if(p.val>rec.val) rec=p; });
+      const cls = delta>0.01?"up":(delta<-0.01?"down":"flat");
+      const sign = delta>0?"+":(delta<0?"":"");
+      const stats=`<div class="stats">
+        <div class="stat"><b>${num(start)}</b><span>Start${unit(metricState)}</span></div>
+        <div class="stat"><b>${num(now)}</b><span>Acum${unit(metricState)}</span></div>
+        <div class="stat ${cls}"><b>${sign}${num(delta)}</b><span>${sign}${pct}%</span></div>
+        <div class="stat"><b>${num(rec.val)}</b><span>Record · S${rec.week}</span></div>
+      </div>`;
+      ov.innerHTML=`<h4>${i+1}. ${ex.n}</h4>${stats}${svgLine(s)}`;
       m.appendChild(ov);
     });
   });
+
   const data=document.createElement("div"); data.className="data";
   data.innerHTML=`
     <h3>Datele tale</h3>
@@ -342,36 +434,74 @@ function importData(e){
   r.readAsText(f);
 }
 
-/* ---------- Timer ---------- */
-let remain=90, tickId=null, audioCtx=null;
-function fmt(s){ const m=Math.floor(s/60); return m+":"+String(s%60).padStart(2,"0"); }
-function paintClock(){ const c=document.getElementById("clock"); c.textContent=fmt(remain);
-  c.className="clock"+(tickId?" run":"")+(remain<=0?" zero":""); }
+/* ---------- Timer (bazat pe timp real + Wake Lock) ---------- */
+let remain=90;          // secunde rămase când e oprit/pe pauză
+let endTime=null;       // momentul-țintă (timestamp) cât timp rulează
+let tickId=null, audioCtx=null, wakeLock=null, fired=false;
+const tStartBtn=document.getElementById("tStart");
+
+function fmt(s){ s=Math.max(0,s); const m=Math.floor(s/60); return m+":"+String(s%60).padStart(2,"0"); }
+function curRemain(){ return endTime!==null ? Math.round((endTime-Date.now())/1000) : remain; }
+function paintClock(){ const r=curRemain(); const c=document.getElementById("clock");
+  c.textContent=fmt(r); c.className="clock"+(endTime!==null?" run":"")+(r<=0?" zero":""); }
+
+async function reqWake(){ try{ if("wakeLock" in navigator && !wakeLock){
+  wakeLock=await navigator.wakeLock.request("screen");
+  wakeLock.addEventListener("release",()=>{ wakeLock=null; }); } }catch(e){} }
+function relWake(){ try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} }
+
+function tick(){ if(curRemain()<=0){ finishTimer(); } else paintClock(); }
+
 function startTimer(sec){
-  if(sec){ remain=sec; }
+  const base = sec ? sec : (curRemain()>0?curRemain():90);
+  endTime = Date.now() + base*1000;
+  fired=false;
   if(tickId) clearInterval(tickId);
-  paintClock();
-  tickId=setInterval(()=>{ remain--; if(remain<=0){ remain=0; paintClock(); stopTimer(); buzz(); }
-    else paintClock(); },1000);
-  document.getElementById("tStart").textContent="Pauză";
+  tickId=setInterval(tick,250);
+  tStartBtn.textContent="Pauză";
+  reqWake();
   paintClock();
 }
-function stopTimer(){ if(tickId){clearInterval(tickId);tickId=null;} document.getElementById("tStart").textContent="Start"; paintClock(); }
+function pauseTimer(){
+  remain=Math.max(0,curRemain()); endTime=null;
+  if(tickId){clearInterval(tickId);tickId=null;}
+  tStartBtn.textContent="Start"; relWake(); paintClock();
+}
+function finishTimer(){
+  remain=0; endTime=null;
+  if(tickId){clearInterval(tickId);tickId=null;}
+  tStartBtn.textContent="Start"; relWake();
+  if(!fired){ fired=true; buzz(); }
+  paintClock();
+}
+function resetTimer(){
+  endTime=null; if(tickId){clearInterval(tickId);tickId=null;}
+  relWake(); remain=90; tStartBtn.textContent="Start"; paintClock();
+}
 function buzz(){
-  if(navigator.vibrate) navigator.vibrate([260,120,260]);
+  if(navigator.vibrate) navigator.vibrate([260,120,260,120,260]);
   try{ audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==="suspended") audioCtx.resume();
     [0,180,360].forEach(d=>{ const o=audioCtx.createOscillator(),g=audioCtx.createGain();
       o.frequency.value=880; o.connect(g); g.connect(audioCtx.destination);
       const t=audioCtx.currentTime+d/1000; g.gain.setValueAtTime(.0001,t);
       g.gain.exponentialRampToValueAtTime(.4,t+.02); g.gain.exponentialRampToValueAtTime(.0001,t+.16);
       o.start(t); o.stop(t+.18); }); }catch(e){}
-  document.getElementById("timerDock").classList.add("flash");
-  setTimeout(()=>document.getElementById("timerDock").classList.remove("flash"),1600);
+  const dock=document.getElementById("timerDock");
+  dock.classList.add("flash"); setTimeout(()=>dock.classList.remove("flash"),1600);
 }
 document.querySelectorAll(".presets button").forEach(b=> b.onclick=()=>startTimer(+b.dataset.s));
-document.getElementById("tStart").onclick=()=>{ if(tickId) stopTimer(); else startTimer(remain>0?remain:90); };
-document.getElementById("tAdd").onclick=()=>{ remain+=15; paintClock(); };
-document.getElementById("tReset").onclick=()=>{ stopTimer(); remain=90; paintClock(); };
+tStartBtn.onclick=()=>{ if(endTime!==null) pauseTimer(); else startTimer(curRemain()>0?curRemain():90); };
+document.getElementById("tAdd").onclick=()=>{ if(endTime!==null){ endTime+=15000; } else { remain+=15; } paintClock(); };
+document.getElementById("tReset").onclick=resetTimer;
+
+// Când revii în pagină: recalculează (și sună dacă pauza s-a terminat între timp)
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible"){
+    if(endTime!==null){ if(curRemain()<=0) finishTimer(); else reqWake(); }
+    paintClock();
+  }
+});
 
 /* ---------- Nav / week ---------- */
 function showView(which){
